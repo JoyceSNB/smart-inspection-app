@@ -1,18 +1,4 @@
-# Deploy ke Streamlit Community Cloud (link permanen)
-
-Ini versi `app.py` yang disesuaikan supaya bisa jalan **tanpa Colab** — hosting gratis,
-link permanen, tidak perlu dinyalain manual tiap mau dipakai.
-
-**Trade-off dibanding versi Colab** (baca dulu sebelum lanjut):
-- Kalibrasi threshold otomatis **tidak tersedia** (dataset MVTec AD penuh ~5GB tidak mungkin
-  di-bundle) — threshold diatur manual lewat slider di sidebar.
-- Riwayat inspeksi & foto upload **sementara per sesi** — reset kalau aplikasi di-restart
-  Streamlit Cloud (beda dari versi Drive yang permanen). Fitur inti (upload → hasil PASS/REJECT)
-  tetap penuh berfungsi.
-- Ada risiko RAM terbatas di tier gratis (1GB) — PyTorch + WideResNet-50 lumayan berat.
-  Kalau app crash/lambat, itu kemungkinan penyebabnya (lihat bagian Troubleshooting).
-
----
+# Deploy ke Streamlit Community Cloud 
 
 ## Langkah 1 — Siapkan artifacts.zip (cukup PatchCore, bukan semua)
 
