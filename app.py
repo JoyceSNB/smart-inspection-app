@@ -18,6 +18,7 @@ import json
 import pickle
 import sqlite3
 import time
+import zipfile
 from datetime import datetime
 
 import numpy as np
@@ -38,12 +39,16 @@ from sklearn.neighbors import NearestNeighbors
 import streamlit as st
 
 # ============================================================
-# KONFIGURASI - sesuaikan dengan environment kamu
+# KONFIGURASI - versi Streamlit Community Cloud
 # ============================================================
-ARTIFACT_DIR = "/content/drive/MyDrive/Kelompok 1_Nalara/artifacts"
-DATA_ROOT = "/content/mvtec_ad"   # dipakai HANYA untuk kalibrasi threshold otomatis (sample gambar normal)
-DB_PATH = "/content/drive/MyDrive/Kelompok 1_Nalara/inspection_history.db"
-UPLOAD_DIR = "/content/drive/MyDrive/Kelompok 1_Nalara/inspection_uploads"   # foto yang diupload disimpan di sini
+# Path LOKAL (disk sementara Streamlit Cloud, bukan Google Drive lagi)
+ARTIFACT_DIR = "/tmp/artifacts"
+DB_PATH = "/tmp/inspection_history.db"
+UPLOAD_DIR = "/tmp/inspection_uploads"
+DATA_ROOT = None   # dataset penuh tidak tersedia di Streamlit Cloud -> kalibrasi otomatis dinonaktifkan
+
+# ID file Google Drive untuk artifacts.zip (ganti dengan punya kamu -- lihat README_STREAMLIT_CLOUD.md)
+ARTIFACTS_DRIVE_FILE_ID = st.secrets.get("ARTIFACTS_DRIVE_FILE_ID", "GANTI_DENGAN_FILE_ID_DRIVE_KAMU")
 
 IMG_SIZE = 224
 RESIZE_SIZE = 256
@@ -269,6 +274,39 @@ def save_uploaded_image(pil_image, category, filename):
 
 
 # ============================================================
+# DOWNLOAD ARTIFACTS DARI GOOGLE DRIVE (sekali saja, di-cache disk)
+# ============================================================
+def ensure_artifacts_available():
+    """Download & extract artifacts.zip dari Google Drive kalau belum ada di disk lokal.
+    Streamlit Cloud tidak punya akses Google Drive langsung seperti Colab, jadi
+    artifacts (patchcore.pkl + config.json per kategori) diambil sekali di awal
+    lalu disimpan ke disk container -- persist selama container tidak di-redeploy."""
+    if os.path.isdir(ARTIFACT_DIR) and len(os.listdir(ARTIFACT_DIR)) > 0:
+        return None  # sudah ada, skip
+
+    if ARTIFACTS_DRIVE_FILE_ID == "GANTI_DENGAN_FILE_ID_DRIVE_KAMU":
+        return ("File ID Google Drive belum diatur. Tambahkan ARTIFACTS_DRIVE_FILE_ID "
+                "di Settings > Secrets aplikasi Streamlit Cloud kamu.")
+
+    try:
+        import gdown
+    except ImportError:
+        return "Package 'gdown' belum terpasang -- tambahkan ke requirements.txt."
+
+    os.makedirs(ARTIFACT_DIR, exist_ok=True)
+    zip_path = "/tmp/artifacts.zip"
+    url = f"https://drive.google.com/uc?id={ARTIFACTS_DRIVE_FILE_ID}"
+    try:
+        gdown.download(url, zip_path, quiet=False)
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall("/tmp")
+        os.remove(zip_path)
+    except Exception as e:
+        return f"Gagal download/extract artifacts.zip: {e}"
+    return None
+
+
+# ============================================================
 # MODEL LOADING (cached supaya tidak reload tiap interaksi)
 # ============================================================
 @st.cache_resource(show_spinner=False)
@@ -299,6 +337,8 @@ def calibrate_thresholds(category, _patchcore, sample_size=CALIBRATION_SAMPLE_SI
     yang skalanya berbeda dari skor PatchCore murni).
     percentile_low diturunkan ke 90 (dari 95) supaya ada jarak yang cukup lebar ke
     percentile_high -- zona "NEEDS MANUAL INSPECTION" jangan sampai nyaris tidak ada."""
+    if DATA_ROOT is None:
+        return None, None, "Kalibrasi otomatis tidak tersedia di deployment ini (dataset penuh tidak di-bundle). Atur threshold manual di sidebar."
     good_dir = os.path.join(DATA_ROOT, category, "train", "good")
     if not os.path.isdir(good_dir):
         # fallback kalau DATA_ROOT tidak tersedia di environment deployment ini
@@ -422,6 +462,12 @@ init_db()
 st.title("Smart Industrial Product Inspection")
 st.caption("Computer Vision Quality Control — Kelompok 1 — National AI & Deep Learning Acceleration Bootcamp")
 
+with st.spinner("Menyiapkan model (download pertama kali bisa beberapa menit)..."):
+    download_error = ensure_artifacts_available()
+if download_error:
+    st.error(download_error)
+    st.stop()
+
 available_categories = get_available_categories()
 
 with st.sidebar:
@@ -431,25 +477,12 @@ with st.sidebar:
         st.stop()
 
     category = st.selectbox("Kategori produk", available_categories)
+    patchcore = load_patchcore(category)
 
     st.divider()
     st.subheader("Threshold QC")
-    auto_calib = st.checkbox("Kalibrasi otomatis dari data normal", value=True)
-
-    patchcore = load_patchcore(category)
-
-    if auto_calib:
-        with st.spinner(f"Mengkalibrasi threshold untuk '{category}'..."):
-            tau_low_auto, tau_high_auto, calib_msg = calibrate_thresholds(category, patchcore)
-        if calib_msg:
-            st.warning(calib_msg)
-            tau_low_default, tau_high_default = 10.0, 20.0
-        else:
-            tau_low_default, tau_high_default = tau_low_auto, tau_high_auto
-            st.caption(f"Terkalibrasi dari {CALIBRATION_SAMPLE_SIZE} sample gambar normal.")
-    else:
-        tau_low_default, tau_high_default = 10.0, 20.0
-        st.caption("Kalibrasi otomatis nonaktif — nilai di bawah cuma placeholder awal, sesuaikan manual.")
+    st.caption("Kalibrasi otomatis tidak tersedia di deployment ini (dataset penuh tidak di-bundle) — atur manual di bawah. Tips: upload 1 gambar dulu, lihat anomaly score yang keluar, baru sesuaikan tau_low/tau_high di sekitar angka itu.")
+    tau_low_default, tau_high_default = 10.0, 20.0
 
     tau_low = st.number_input("tau_low (batas PASS)", value=float(round(tau_low_default, 3)), format="%.3f")
     tau_high = st.number_input("tau_high (batas REJECT)", value=float(round(tau_high_default, 3)), format="%.3f")
